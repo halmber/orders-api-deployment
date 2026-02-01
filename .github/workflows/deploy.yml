@@ -1,0 +1,233 @@
+name: Deploy to GKE
+
+on:
+  # Triggered by app repositories after successful build
+  repository_dispatch:
+    types: [deploy]
+
+  # Manual deployment
+  workflow_dispatch:
+    inputs:
+      services:
+        description: 'Services to deploy (comma-separated: orders-api-service,email-sender-service,gateway,frontend or all)'
+        required: true
+        default: 'all'
+      image_tag:
+        description: 'Image tag to deploy'
+        required: true
+        default: 'latest'
+
+env:
+  GKE_PROJECT: ${{ secrets.GKE_PROJECT }}
+  GKE_CLUSTER: ${{ secrets.GKE_CLUSTER }}
+  GKE_ZONE: ${{ secrets.GKE_ZONE }}
+  REGISTRY: ghcr.io
+  NAMESPACE: orders-system
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GKE_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GKE_PROJECT }}
+          install_components: 'gke-gcloud-auth-plugin'
+
+      - name: Configure kubectl
+        run: |
+          gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} \
+            --zone ${{ env.GKE_ZONE }} \
+            --project ${{ env.GKE_PROJECT }}
+
+      - name: Determine deployment parameters
+        id: params
+        run: |
+          # Default owner (can be overridden by repository_dispatch)
+          OWNER_LC=$(echo "${{ secrets.IMAGE_OWNER || github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "owner=${OWNER_LC}" >> $GITHUB_OUTPUT
+
+          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+            # From app repository trigger
+            echo "services=${{ github.event.client_payload.services }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ github.event.client_payload.tag }}" >> $GITHUB_OUTPUT
+            echo "source_repo=${{ github.event.client_payload.source_repo }}" >> $GITHUB_OUTPUT
+          else
+            # Manual dispatch
+            echo "services=${{ github.event.inputs.services }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
+            echo "source_repo=manual" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update image versions in kustomization
+        run: |
+          cd kustomize
+          SERVICES="${{ steps.params.outputs.services }}"
+          TAG="${{ steps.params.outputs.tag }}"
+          OWNER="${{ steps.params.outputs.owner }}"
+
+          echo "Deploying services: $SERVICES with tag: $TAG"
+
+          if [[ "$SERVICES" == "all" || "$SERVICES" == *"orders-api-service"* ]]; then
+            echo "Updating orders-api-service to $TAG"
+            kustomize edit set image orders-api-service=${{ env.REGISTRY }}/${OWNER}/orders-api-service:${TAG}
+          fi
+
+          if [[ "$SERVICES" == "all" || "$SERVICES" == *"email-sender-service"* ]]; then
+            echo "Updating email-sender-service to $TAG"
+            kustomize edit set image email-sender-service=${{ env.REGISTRY }}/${OWNER}/email-sender-service:${TAG}
+          fi
+
+          if [[ "$SERVICES" == "all" || "$SERVICES" == *"gateway"* ]]; then
+            echo "Updating gateway to $TAG"
+            kustomize edit set image gateway-service=${{ env.REGISTRY }}/${OWNER}/orders-api-gateway:${TAG}
+          fi
+
+          if [[ "$SERVICES" == "all" || "$SERVICES" == *"frontend"* ]]; then
+            echo "Updating frontend to $TAG"
+            kustomize edit set image frontend-service=${{ env.REGISTRY }}/${OWNER}/orders-frontend:${TAG}
+          fi
+
+      - name: Install nginx-ingress controller if not exists
+        run: |
+          if ! kubectl get namespace ingress-nginx &> /dev/null; then
+            echo "Installing nginx-ingress controller..."
+            kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.9.4/deploy/static/provider/cloud/deploy.yaml
+
+            echo "Waiting for ingress controller to be ready..."
+            kubectl wait --namespace ingress-nginx \
+              --for=condition=ready pod \
+              --selector=app.kubernetes.io/component=controller \
+              --timeout=180s
+          else
+            echo "nginx-ingress controller already installed"
+          fi
+
+      - name: Create namespace if not exists
+        run: |
+          kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Create secrets if not exist
+        run: |
+          # PostgreSQL secret
+          if ! kubectl get secret postgresql-secret -n ${{ env.NAMESPACE }} &> /dev/null; then
+            kubectl create secret generic postgresql-secret \
+              --from-literal=username=postgres \
+              --from-literal=password="${{ secrets.POSTGRES_PASSWORD }}" \
+              -n ${{ env.NAMESPACE }}
+          fi
+
+          # Email secret
+          if ! kubectl get secret email-secret -n ${{ env.NAMESPACE }} &> /dev/null; then
+            kubectl create secret generic email-secret \
+              --from-literal=host="${{ secrets.MAIL_HOST }}" \
+              --from-literal=port="${{ secrets.MAIL_PORT }}" \
+              --from-literal=username="${{ secrets.MAIL_USERNAME }}" \
+              --from-literal=password="${{ secrets.MAIL_PASSWORD }}" \
+              -n ${{ env.NAMESPACE }}
+          fi
+
+          # OAuth secret
+          if ! kubectl get secret oauth-secret -n ${{ env.NAMESPACE }} &> /dev/null; then
+            kubectl create secret generic oauth-secret \
+              --from-literal=client-id="${{ secrets.OAUTH_GOOGLE_CLIENT_ID }}" \
+              --from-literal=client-secret="${{ secrets.OAUTH_GOOGLE_CLIENT_SECRET }}" \
+              -n ${{ env.NAMESPACE }}
+          fi
+
+      - name: Update ConfigMap with frontend URL
+        run: |
+          kubectl create configmap app-config \
+            --from-literal=frontend-url="${{ secrets.FRONTEND_URL }}" \
+            -n ${{ env.NAMESPACE }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy to GKE
+        run: |
+          kubectl apply -k kustomize/
+
+      - name: Restart deployments to pick up new images
+        run: |
+          SERVICES="${{ steps.params.outputs.services }}"
+
+          if [[ "$SERVICES" == "all" || "$SERVICES" == *"orders-api-service"* ]]; then
+            echo "Restarting orders-api-service..."
+            kubectl rollout restart deployment/orders-api-service -n ${{ env.NAMESPACE }}
+          fi
+
+          if [[ "$SERVICES" == "all" || "$SERVICES" == *"email-sender-service"* ]]; then
+            echo "Restarting email-sender-service..."
+            kubectl rollout restart deployment/email-sender-service -n ${{ env.NAMESPACE }}
+          fi
+
+          if [[ "$SERVICES" == "all" || "$SERVICES" == *"gateway"* ]]; then
+            echo "Restarting gateway..."
+            kubectl rollout restart deployment/gateway -n ${{ env.NAMESPACE }}
+          fi
+
+          if [[ "$SERVICES" == "all" || "$SERVICES" == *"frontend"* ]]; then
+            echo "Restarting frontend..."
+            kubectl rollout restart deployment/frontend -n ${{ env.NAMESPACE }}
+          fi
+
+      - name: Wait for rollout
+        run: |
+          SERVICES="${{ steps.params.outputs.services }}"
+
+          if [[ "$SERVICES" == "all" || "$SERVICES" == *"orders-api-service"* ]]; then
+            kubectl rollout status deployment/orders-api-service -n ${{ env.NAMESPACE }} --timeout=180s || true
+          fi
+
+          if [[ "$SERVICES" == "all" || "$SERVICES" == *"email-sender-service"* ]]; then
+            kubectl rollout status deployment/email-sender-service -n ${{ env.NAMESPACE }} --timeout=180s || true
+          fi
+
+          if [[ "$SERVICES" == "all" || "$SERVICES" == *"gateway"* ]]; then
+            kubectl rollout status deployment/gateway -n ${{ env.NAMESPACE }} --timeout=180s || true
+          fi
+
+          if [[ "$SERVICES" == "all" || "$SERVICES" == *"frontend"* ]]; then
+            kubectl rollout status deployment/frontend -n ${{ env.NAMESPACE }} --timeout=180s || true
+          fi
+
+      - name: Get deployment status
+        run: |
+          echo "=== Deployed Services ==="
+          kubectl get services -n ${{ env.NAMESPACE }}
+          echo ""
+          echo "=== Ingress ==="
+          kubectl get ingress -n ${{ env.NAMESPACE }}
+          echo ""
+          echo "=== Pod Status ==="
+          kubectl get pods -n ${{ env.NAMESPACE }}
+          echo ""
+          echo "=== Deployment triggered by: ${{ steps.params.outputs.source_repo }} ==="
+          echo "=== Image tag: ${{ steps.params.outputs.tag }} ==="
+          echo ""
+          echo "=== ACCESS URL ==="
+          INGRESS_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
+          echo "Backend API: http://${INGRESS_IP}"
+          echo "Frontend: ${{ secrets.FRONTEND_URL }}"
+          echo ""
+
+      - name: Commit kustomization changes
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add kustomize/kustomization.yml
+          git diff --staged --quiet || git commit -m "Deploy: Update image tags to ${{ steps.params.outputs.tag }}
+
+          Services: ${{ steps.params.outputs.services }}
+          Source: ${{ steps.params.outputs.source_repo }}"
+          git push || echo "No changes to push"

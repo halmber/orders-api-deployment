@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gateway
+  template:
+    metadata:
+      labels:
+        app: gateway
+    spec:
+      containers:
+        - name: gateway
+          image: gateway-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 1000
+          resources:
+            limits:
+              memory: '1Gi'
+              cpu: '500m'
+            requests:
+              memory: '256Mi'
+              cpu: '100m'
+          env:
+            - name: REDIS_HOST
+              value: 'redis'
+            - name: REDIS_PORT
+              value: '6379'
+            - name: REDIS_USERNAME
+              value: ''
+            - name: REDIS_PASSWORD
+              value: ''
+            - name: REDIS_SSL
+              value: 'false'
+            - name: SPRING_CLOUD_CONSUL_HOST
+              value: 'consul'
+            - name: SPRING_CLOUD_CONSUL_PORT
+              value: '8500'
+            - name: SPRING_CLOUD_CONSUL_DISCOVERY_ENABLED
+              value: 'true'
+            - name: OAUTH_GOOGLE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: oauth-secret
+                  key: client-id
+            - name: OAUTH_GOOGLE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: oauth-secret
+                  key: client-secret
+            - name: OAUTH_GOOGLE_SCOPE
+              value: 'openid email profile'
+            - name: FRONTEND_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: frontend-url
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 1000
+            initialDelaySeconds: 40
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 1000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5

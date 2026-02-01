@@ -1,0 +1,273 @@
+# Orders API Deployment
+
+Infrastructure repository for Kubernetes deployment manifests of the Orders API microservices system.
+
+## System Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                         Orders API System                                │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ┌──────────────┐      ┌──────────────────┐       ┌─────────────────┐    │
+│  │   Frontend   │◄─────┤     Gateway      │◄──┬───┤  Orders API     │    │
+│  │  (Port 80)   │      │   (Port 1000)    │   │   │  Service        │    │
+│  └──────────────┘      │  - OAuth Auth    │   │   │  (Port 8080)    │    │
+│         │              │  - Session Mgmt  │   │   └────────┬────────┘    │
+│         │              │  - Service Disc  │   │            │             │
+│         │              └────────┬─────────┘   │   ┌────────▼────────┐    │
+│         │                       │             │   │  Email Sender   │    │
+│         │                       │             │   │  Service        │    │
+│         │                       │             │   │  (Port 8081)    │    │
+│         │                       │             │   └────────┬────────┘    │
+│         │                       │             │            │             │
+│         │              ┌────────▼─────────┐   │   ┌────────▼────────┐    │
+│         │              │   PostgreSQL     │   │   │ Elasticsearch   │    │
+│         │              │   (Port 5432)    │   │   │  (Port 9200)    │    │
+│         │              └──────────────────┘   │   └─────────────────┘    │
+│         │                                     │                          │
+│         │              ┌──────────────────┐   │   ┌─────────────────┐    │
+│         ├──────────────┤     Consul       │   └───┤      Kafka      │    │
+│         │              │   (Port 8500)    │       │   (Port 9092)   │    │
+│         │              └──────────────────┘       └─────────────────┘    │
+│         │                                                                │
+│         │              ┌──────────────────┐       ┌─────────────────┐    │
+│         └──────────────┤      Redis       │       │    Zookeeper    │    │
+│                        │   (Port 6379)    │       │   (Port 2181)   │    │
+│                        └──────────────────┘       └─────────────────┘    │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+## OAuth Authentication Flow
+
+**Important:** Google OAuth redirects to Gateway, which then redirects to Frontend.
+
+### URL Routing
+
+```
+Ingress (nginx)
+├── /oauth/*          → Gateway (OAuth flow)
+│   ├── /oauth/authenticate
+│   └── /oauth/callback    ← Google redirects here
+├── /api/*            → Gateway → Backend services
+└── /*                → Frontend (React SPA)
+    └── /oauth-callback    ← Gateway redirects here after auth
+```
+
+### Flow Sequence
+
+1. User clicks login on Frontend
+2. Frontend redirects to `/oauth/authenticate`
+3. Gateway redirects to Google OAuth
+4. User authorizes on Google
+5. Google redirects to `/oauth/callback` (Gateway)
+6. Gateway validates, creates session, sets cookie
+7. Gateway redirects to `/oauth-callback` (Frontend)
+8. Frontend loads with authenticated session
+
+## Repository Structure
+
+```
+orders-api-deployment/
+├── .github/workflows/
+│   └── deploy.yml                    # Deploy to GKE workflow
+├── kustomize/
+│   ├── base/
+│   │   ├── namespace/                # Namespace definition
+│   │   ├── consul/                   # Service discovery
+│   │   ├── redis/                    # Session storage
+│   │   ├── elasticsearch/            # Email tracking storage
+│   │   ├── zookeeper/                # Kafka coordination
+│   │   ├── kafka/                    # Message broker
+│   │   ├── postgresql/               # Orders database
+│   │   ├── orders-api-service/       # Main API service
+│   │   ├── email-sender-service/     # Email notification service
+│   │   ├── gateway/                  # API Gateway with OAuth
+│   │   ├── ingress/                  # External access
+│   │   └── kustomization.yml         # Base configuration
+│   └── kustomization.yml             # Image versions
+├── scripts/
+│   ├── create-secrets.sh             # Create K8s secrets
+│   └── deploy.sh                     # Manual deployment script
+└── README.md
+```
+
+## How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  orders-ms-oauth-gateway (app repo)      orders-api-deployment (this repo)  │
+│                                                                             │
+│  Push code ──► Build images ──► repository_dispatch ──► Deploy to GKE       │
+│                                                                             │
+│  [build-and-push.yml]                                  [deploy.yml]         │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Automated Deployment Flow
+
+1. Developer pushes code to `orders-ms-oauth-gateway`
+2. GitHub Actions builds Docker images and pushes to GHCR
+3. Build workflow triggers `repository_dispatch` event
+4. This repository's workflow deploys updated services to GKE
+5. Kustomization file is updated with new image tags
+
+## GitHub Secrets Required
+
+### GKE Access
+| Secret | Description | Example |
+|--------|-------------|---------|
+| `GKE_PROJECT` | Google Cloud Project ID | `my-project-123456` |
+| `GKE_CLUSTER` | GKE Cluster name | `orders-api-cluster` |
+| `GKE_ZONE` | GKE Zone | `europe-west1-b` |
+| `GKE_SA_KEY` | Service Account JSON key | `{ "type": "service_account", ... }` |
+
+### Application Secrets
+| Secret | Description | Example |
+|--------|-------------|---------|
+| `POSTGRES_PASSWORD` | PostgreSQL password | `securepass123` |
+| `MAIL_HOST` | SMTP server | `smtp.gmail.com` |
+| `MAIL_PORT` | SMTP port | `587` |
+| `MAIL_USERNAME` | Email username | `noreply@example.com` |
+| `MAIL_PASSWORD` | Email password | `app-specific-password` |
+| `OAUTH_GOOGLE_CLIENT_ID` | Google OAuth Client ID | `123-abc.apps.googleusercontent.com` |
+| `OAUTH_GOOGLE_CLIENT_SECRET` | Google OAuth Secret | `GOCSPX-abc123...` |
+| `FRONTEND_URL` | Frontend URL for CORS | `https://app.example.com` |
+
+### Optional
+| Secret | Description | Default |
+|--------|-------------|---------|
+| `IMAGE_OWNER` | GitHub username for images | `github.repository_owner` |
+
+## App Repository Setup
+
+The app repository (`orders-ms-oauth-gateway`) needs:
+
+| Secret | Description |
+|--------|-------------|
+| `DEPLOY_REPO_TOKEN` | Personal Access Token with `repo` scope |
+
+### Creating the PAT
+
+1. Go to GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
+2. Generate new token with `repo` scope
+3. Add as `DEPLOY_REPO_TOKEN` secret in `orders-ms-oauth-gateway` repository
+
+## Services Overview
+
+### Application Services
+
+#### Frontend (Port 80)
+- React SPA
+- nginx server
+- Serves UI
+- Handles OAuth callback page
+- Proxies API requests to Gateway
+
+#### Gateway (Port 1000)
+- Spring Cloud Gateway
+- Google OAuth authentication
+- Session management with Redis
+- Service discovery with Consul
+- Routes requests to backend services
+
+#### Orders API Service (Port 8080)
+- RESTful API for order management
+- Customer management
+- Report generation (CSV/Excel)
+- Kafka producer for email events
+- PostgreSQL for data persistence
+
+#### Email Sender Service (Port 8081)
+- Kafka consumer for email events
+- Email delivery with retry mechanism
+- Elasticsearch for email tracking
+- Scheduled retry jobs with ShedLock
+
+### Infrastructure Services
+
+#### Consul (Port 8500)
+- Service discovery
+- Health checking
+- Distributed configuration
+
+#### Redis (Port 6379)
+- Session storage for Gateway
+- High-performance cache
+
+#### Elasticsearch (Port 9200)
+- Email tracking and history
+- Search capabilities
+
+#### Kafka + Zookeeper (Ports 9092, 2181)
+- Asynchronous messaging
+- Event-driven architecture
+- Email event streaming
+
+#### PostgreSQL (Port 5432)
+- Orders and customers data
+- Liquibase migrations
+
+## Manual Deployment
+
+
+```bash   
+# Trigger deployment via GitHub Actions UI (workflow_dispatch)
+# Or use gh CLI:
+gh workflow run deploy.yml -f services=all -f image_tag=latest
+```
+
+### Local Deploy
+
+```bash
+# Connect to cluster
+gcloud container clusters get-credentials CLUSTER_NAME --zone ZONE
+
+# Create secrets
+./scripts/create-secrets.sh
+
+# Deploy
+kubectl apply -k kustomize/
+```
+
+## CI/CD Pipeline
+
+### Build Pipeline (in app repository)
+1. Code pushed to `main` branch
+2. Tests run
+3. Docker images built
+4. Images pushed to GHCR
+5. Deployment triggered via `repository_dispatch`
+
+### Deployment Pipeline (this repository)
+1. Receives `repository_dispatch` event
+2. Updates image tags in `kustomization.yml`
+3. Applies changes to GKE
+4. Waits for rollout completion
+5. Commits updated image tags
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make changes to manifests
+4. Test locally with `./scripts/deploy.sh --dry-run`
+5. Submit a pull request
+
+## License
+
+MIT License - feel free to use this as a reference for your own deployments.
+
+## Support
+
+For issues related to:
+- **Application code**: See `orders-ms-oauth-gateway` repository
+- **Deployment manifests**: Open an issue in this repository
+- **Kubernetes**: Check [Kubernetes documentation](https://kubernetes.io/docs/)
+- **GKE**: Check [GKE documentation](https://cloud.google.com/kubernetes-engine/docs)
+
+## Related Repositories
+
+- [orders-ms-oauth-gateway](https://github.com/halmber/orders-ms-oauth-gateway) - Application source code
+- [orders-react-client](https://github.com/halmber/orders-react-client) - Frontend

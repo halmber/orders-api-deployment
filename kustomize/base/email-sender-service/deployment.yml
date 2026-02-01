@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: email-sender-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: email-sender-service
+  template:
+    metadata:
+      labels:
+        app: email-sender-service
+    spec:
+      containers:
+        - name: email-sender-service
+          image: email-sender-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8081
+          resources:
+            limits:
+              memory: '1Gi'
+              cpu: '500m'
+            requests:
+              memory: '256Mi'
+              cpu: '100m'
+          env:
+            - name: ES_ADDRESS
+              value: 'elasticsearch:9200'
+            - name: KAFKA_ADDRESS
+              value: 'kafka:9092'
+            - name: MAIL_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: email-secret
+                  key: host
+            - name: MAIL_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: email-secret
+                  key: port
+            - name: MAIL_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: email-secret
+                  key: username
+            - name: MAIL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: email-secret
+                  key: password
+            - name: SPRING_CLOUD_CONSUL_HOST
+              value: 'consul'
+            - name: SPRING_CLOUD_CONSUL_PORT
+              value: '8500'
+            - name: SPRING_CLOUD_CONSUL_DISCOVERY_ENABLED
+              value: 'true'
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 90
+            periodSeconds: 30
+            timeoutSeconds: 5

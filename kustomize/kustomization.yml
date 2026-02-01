@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - base
+
+# Image versions - updated by CI/CD
+images:
+  - name: orders-api-service
+    newName: ghcr.io/halmber/orders-api-service
+    newTag: latest
+  - name: email-sender-service
+    newName: ghcr.io/halmber/email-sender-service
+    newTag: latest
+  - name: gateway-service
+    newName: ghcr.io/halmber/orders-api-gateway
+    newTag: latest
+  - name: frontend-service
+    newName: ghcr.io/halmber/orders-frontend
+    newTag: latest
