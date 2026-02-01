@@ -1,0 +1,19 @@
+# IDE
+.idea/*
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local overrides
+kustomize/overlays/local/
+*.local.yml
+
+# Secrets (never commit!)
+*-secret.yml
+secrets/
+*.key
+*.pem
