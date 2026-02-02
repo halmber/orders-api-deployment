@@ -12,6 +12,8 @@ spec:
       labels:
         app: elasticsearch
     spec:
+      securityContext:
+        fsGroup: 1000
       containers:
         - name: elasticsearch
           image: elasticsearch:8.6.1
