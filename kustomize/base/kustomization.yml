@@ -23,9 +23,3 @@ resources:
 
   # Ingress (external access)
   - ingress
-
-# ConfigMap for application-wide configuration
-configMapGenerator:
-  - name: app-config
-    literals:
-      - frontend-url=http://localhost:3050
