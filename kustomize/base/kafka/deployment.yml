@@ -15,6 +15,9 @@ spec:
       containers:
         - name: kafka
           image: confluentinc/cp-kafka:7.7.7
+          volumeMounts:
+            - mountPath: /var/lib/kafka/data
+              name: kafka-data
           env:
             - name: KAFKA_BROKER_ID
               value: "1"
@@ -41,3 +44,7 @@ spec:
             requests:
               memory: "512Mi"
               cpu: "200m"
+      volumes:
+        - name: kafka-data
+          persistentVolumeClaim:
+            claimName: kafka-data
