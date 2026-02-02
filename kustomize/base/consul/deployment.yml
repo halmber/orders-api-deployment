@@ -22,6 +22,10 @@ spec:
             - "-ui"
             - "-bootstrap-expect=1"
             - "-client=0.0.0.0"
+            - "-data-dir=/consul/data"
+          volumeMounts:
+            - name: consul-data
+              mountPath: /consul/data
           ports:
             - containerPort: 8500
               name: http
@@ -49,3 +53,7 @@ spec:
                 - members
             initialDelaySeconds: 5
             periodSeconds: 5
+      volumes:
+        - name: consul-data
+          persistentVolumeClaim:
+            claimName: consul-data
