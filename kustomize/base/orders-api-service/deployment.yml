@@ -50,6 +50,12 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            - name: FRONTEND_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: frontend-url
+
           readinessProbe:
             httpGet:
               path: /actuator/health
