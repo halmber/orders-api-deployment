@@ -22,7 +22,7 @@ spec:
             - "-ui"
             - "-bootstrap-expect=1"
             - "-client=0.0.0.0"
-            - "-data_dir=/consul/data"
+            - "-data-dir=/consul/data"
           volumeMounts:
             - name: consul-data
               mountPath: /consul/data
