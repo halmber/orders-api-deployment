@@ -12,8 +12,9 @@ spec:
       labels:
         app: kafka
     spec:
-#      securityContext:
-#        fsGroup: 1000
+      securityContext:
+        runAsUser: 0
+        fsGroup: 0
       containers:
         - name: kafka
           image: confluentinc/cp-kafka:7.7.7
