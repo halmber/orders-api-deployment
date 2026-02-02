@@ -112,5 +112,4 @@ spec:
             failureThreshold: 5
       volumes:
         - name: kafka-data
-          persistentVolumeClaim:
-            claimName: kafka-data
+          emptyDir: { }
