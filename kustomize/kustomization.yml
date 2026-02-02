@@ -11,7 +11,7 @@ images:
   newTag: latest
 - name: frontend-service
   newName: ghcr.io/halmber/orders-frontend
-  newTag: latest
+  newTag: 0b403973dd996d317f0ce4cc6199bc9028d3ad6c
 - name: gateway-service
   newName: ghcr.io/halmber/orders-api-gateway
   newTag: latest
