@@ -54,13 +54,8 @@ spec:
             - name: KAFKA_LISTENERS
               value: "PLAINTEXT://0.0.0.0:9092"
 
-            - name: POD_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
-
             - name: KAFKA_ADVERTISED_LISTENERS
-              value: PLAINTEXT://$(POD_NAME).orders-system.svc.cluster.local:9092
+              value: PLAINTEXT://localhost:9092
 
             - name: KAFKA_INTER_BROKER_LISTENER_NAME
               value: "PLAINTEXT"
