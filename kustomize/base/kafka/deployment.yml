@@ -32,7 +32,7 @@ spec:
               mountPath: /var/lib/kafka/data
       containers:
         - name: kafka
-          image: bitnami/kafka:3.4
+          image: confluentinc/cp-kafka:3.3.3
           volumeMounts:
             - mountPath: /var/lib/kafka/data
               name: kafka-data
