@@ -134,15 +134,10 @@ spec:
 
           # Readiness probe - check if Kafka is ready to accept connections
           readinessProbe:
-            exec:
-              command:
-                - sh
-                - -c
-                - "kafka-broker-api-versions --bootstrap-server=localhost:9092"
+            tcpSocket:
+              port: 9092
             initialDelaySeconds: 60
             periodSeconds: 10
-            timeoutSeconds: 10
-            failureThreshold: 6
 
           # Liveness probe - check if Kafka process is alive
           livenessProbe:
