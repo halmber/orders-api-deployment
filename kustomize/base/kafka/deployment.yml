@@ -55,7 +55,7 @@ spec:
               value: "PLAINTEXT://0.0.0.0:9092"
 
             - name: KAFKA_ADVERTISED_LISTENERS
-              value: PLAINTEXT://kafka-broker.orders-system.svc.cluster.local:9092
+              value: PLAINTEXT://kafka-broker:9092
 
             - name: KAFKA_INTER_BROKER_LISTENER_NAME
               value: "PLAINTEXT"
