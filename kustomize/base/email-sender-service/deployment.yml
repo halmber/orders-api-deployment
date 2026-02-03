@@ -29,7 +29,7 @@ spec:
             - name: ES_ADDRESS
               value: 'elasticsearch:9200'
             - name: KAFKA_ADDRESS
-              value: 'kafka:9092'
+              value: 'kafka-broker:9092'
             - name: MAIL_HOST
               valueFrom:
                 secretKeyRef:
