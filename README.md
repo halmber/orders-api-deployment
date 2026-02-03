@@ -150,7 +150,7 @@ The app repository (`orders-ms-oauth-gateway`) needs:
 - Kafka producer for email events
 - PostgreSQL for data persistence
 
-#### Email Sender Service (Port 8081)
+#### Email Sender Service (Port 8080, ok because in its own gke pod)
 - Kafka consumer for email events
 - Email delivery with retry mechanism
 - Elasticsearch for email tracking
