@@ -1,18 +1,149 @@
 # Orders API Deployment
 
-Infrastructure repository for Kubernetes deployment manifests of the Orders API microservices system.
+Infrastructure repository for Kubernetes deployment manifests. The Orders API system is deployed on Google Kubernetes Engine (GKE) using a microservices architecture with event-driven communication.
 
-## System Architecture
+## Architecture Preview
+
+![GKE Deployments](img/gke-pods.png)
+
+### High-Level Architecture overview
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                         Orders API System                                │
-├──────────────────────────────────────────────────────────────────────────┤
+                                    ┌─────────────────────────────────────┐
+                                    │            GKE Cluster              │
+                                    │                                     │
+┌──────────┐                        │  ┌──────────────────────────────┐   │
+│  User    │──────Internet──────────┼─▶│   Nginx Ingress Controller   │   │
+└──────────┘                        │  └──────────────────────────────┘   │
+                                    │               │                     │
+                                    │               ▼                     │
+                                    │  ┌──────────────────┐               │
+                                    │  │  Ingress Routes  │               │
+                                    │  ├──────────────────┤               │
+                                    │  │ /*               │─────────┐     │
+                                    │  │ /api/*           │──────┐  │     │
+                                    │  │ /oauth/*         │───┐  │  │     │
+                                    │  └──────────────────┘   │  │  │     │
+                                    │                         │  │  │     │
+                                    │        ┌────────────────┘──┘  │     │
+                                    │        ▼                      ▼     │
+                                    │  ┌──────────────┐   ┌─────────────┐ │
+                                    │  │   Gateway    │◀──│   Frontend  │ │
+                                    │  │  (OAuth)     │   │ (nginx:80)  │ │
+                                    │  │    :1000     │   └─────────────┘ │
+                                    │  └──────────────┘                   │
+                                    │          │                          │
+                                    │          ▼                          │
+                                    │  ┌──────────────────────────────┐   │
+                                    │  │      Backend Services        │   │
+                                    │  │  • Orders API (8080)         │   │
+                                    │  │  • Email Sender (8081)       │   │
+                                    │  └──────────────────────────────┘   │
+                                    │                  │                  │      
+                                    │                  ▼                  │
+                                    │  ┌──────────────────────────────┐   │
+                                    │  │        Infrastructure        │   │
+                                    │  ├──────────────────────────────┤   │
+                                    │  │ • Consul                     │   │
+                                    │  │ • Redis                      │   │
+                                    │  │ • PostgreSQL                 │   │
+                                    │  │ • Kafka + Zookeeper          │   │
+                                    │  │ • Elasticsearch              │   │
+                                    │  └──────────────────────────────┘   │
+                                    │                                     │
+                                    └─────────────────────────────────────┘
 ```
 
-## OAuth Authentication Flow
+## Request Flow
 
-**Important:** Google OAuth redirects to Gateway, which then redirects to Frontend.
+### 1. User Authentication (OAuth)
+
+```
+User → Nginx Ingress → Gateway → Google OAuth
+                 ↓
+            Creates Session
+                 ↓
+         Stores in Redis
+                 ↓
+         Sets Cookie
+                 ↓
+      Redirects to Frontend
+```
+
+### 2. API Request Flow
+
+```
+User (with session cookie)
+    ↓
+Nginx Ingress (/api/*)
+    ↓
+Gateway (validates session in Redis)
+    ↓
+Service Discovery (Consul)
+    ↓
+Backend Service (Orders API / Email Sender)
+    ↓
+Database (PostgreSQL / Elasticsearch)
+```
+
+### 3. Async Event Processing
+
+```
+Orders API (create order)
+    ↓
+Kafka Producer (emailSend topic)
+    ↓
+Email Sender Service (Kafka Consumer)
+    ↓
+SMTP Server (send email)
+    ↓
+Elasticsearch (store email history)
+```
+
+## Services Breakdown
+
+### **Frontend Layer**
+
+| Component | Port | Purpose |
+|-----------|------|---------|
+| **Nginx Ingress** | 80/443 | External load balancer, SSL termination, routing |
+| **Frontend (React)** | 80 | Single Page Application, serves UI |
+
+### **Gateway Layer**
+
+| Component | Port | Purpose |
+|-----------|------|---------|
+| **API Gateway** | 1000 | OAuth authentication, session management, request routing |
+
+### **Application Layer**
+
+| Component | Port | Purpose |
+|-----------|------|---------|
+| **Orders API** | 8080 | Customer & order management, CRUD operations, reports |
+| **Email Sender** | 8081 | Async email delivery, retry mechanism, email tracking |
+
+### **Infrastructure Layer**
+
+| Component | Port | Purpose |
+|-----------|------|---------|
+| **Consul** | 8500 | Service discovery, health checks |
+| **Redis** | 6379 | Session storage for Gateway |
+| **PostgreSQL** | 5432 | Relational database for orders/customers |
+| **Kafka** | 9092 | Message broker for async events |
+| **Zookeeper** | 2181 | Kafka coordination |
+| **Elasticsearch** | 9200 | Email tracking and search |
+
+## Networking
+
+### Ingress Routes
+
+The Nginx Ingress Controller routes traffic based on URL paths:
+
+| Path | Target Service | Description |
+|------|----------------|-------------|
+| `/oauth/*` | Gateway | OAuth authentication flow |
+| `/api/*` | Gateway → Backend | All API requests (authenticated) |
+| `/*` | Frontend | React SPA (catch-all) |
 
 ### URL Routing
 
@@ -26,16 +157,38 @@ Ingress (nginx)
     └── /oauth-callback    ← Gateway redirects here after auth
 ```
 
-### Flow Sequence
+### Internal Communication
 
-1. User clicks login on Frontend
-2. Frontend redirects to `/oauth/authenticate`
-3. Gateway redirects to Google OAuth
-4. User authorizes on Google
-5. Google redirects to `/oauth/callback` (Gateway)
-6. Gateway validates, creates session, sets cookie
-7. Gateway redirects to `/oauth-callback` (Frontend)
-8. Frontend loads with authenticated session
+- **Service Discovery**: All services register with Consul and discover each other dynamically
+- **Load Balancing**: Kubernetes ClusterIP services provide internal load balancing
+- **Health Checks**: Consul monitors service health, Kubernetes uses readiness/liveness probes
+
+## Monitoring & Observability
+
+All services expose `/actuator/health` endpoints for:
+- Kubernetes readiness probes
+- Kubernetes liveness probes
+- Consul health checks
+
+## Deployment Process
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  orders-ms-oauth-gateway (app repo)      orders-api-deployment (this repo)  │
+│                                                                             │
+│  Push code ──► Build images ──► repository_dispatch ──► Deploy to GKE       │
+│                                                                             │
+│  [build-and-push.yml]                                  [deploy.yml]         │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+1. **Build**: Docker images built in app repositories
+2. **Push**: Images pushed to GitHub Container Registry
+3. **Deploy**: Kustomize applies manifests to GKE
+4. **Update**: Rolling updates with zero downtime
+5. **Verify**: Health checks ensure successful deployment
+
+---
 
 ## Repository Structure
 
@@ -64,26 +217,6 @@ orders-api-deployment/
 └── README.md
 ```
 
-## How It Works
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  orders-ms-oauth-gateway (app repo)      orders-api-deployment (this repo)  │
-│                                                                             │
-│  Push code ──► Build images ──► repository_dispatch ──► Deploy to GKE       │
-│                                                                             │
-│  [build-and-push.yml]                                  [deploy.yml]         │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Automated Deployment Flow
-
-1. Developer pushes code to `orders-ms-oauth-gateway`
-2. GitHub Actions builds Docker images and pushes to GHCR
-3. Build workflow triggers `repository_dispatch` event
-4. This repository's workflow deploys updated services to GKE
-5. Kustomization file is updated with new image tags
-
 ## GitHub Secrets Required
 
 ### GKE Access
@@ -95,16 +228,16 @@ orders-api-deployment/
 | `GKE_SA_KEY` | Service Account JSON key | `{ "type": "service_account", ... }` |
 
 ### Application Secrets
-| Secret | Description | Example |
-|--------|-------------|---------|
-| `POSTGRES_PASSWORD` | PostgreSQL password | `securepass123` |
-| `MAIL_HOST` | SMTP server | `smtp.gmail.com` |
-| `MAIL_PORT` | SMTP port | `587` |
-| `MAIL_USERNAME` | Email username | `noreply@example.com` |
-| `MAIL_PASSWORD` | Email password | `app-specific-password` |
-| `OAUTH_GOOGLE_CLIENT_ID` | Google OAuth Client ID | `123-abc.apps.googleusercontent.com` |
-| `OAUTH_GOOGLE_CLIENT_SECRET` | Google OAuth Secret | `GOCSPX-abc123...` |
-| `FRONTEND_URL` | Frontend URL for CORS | `https://app.example.com` |
+| Secret | Description                                         | Example |
+|--------|-----------------------------------------------------|---------|
+| `POSTGRES_PASSWORD` | PostgreSQL password                                 | `securepass123` |
+| `MAIL_HOST` | SMTP server                                         | `smtp.gmail.com` |
+| `MAIL_PORT` | SMTP port                                           | `587` |
+| `MAIL_USERNAME` | Email username                                      | `noreply@example.com` |
+| `MAIL_PASSWORD` | Email password                                      | `app-specific-password` |
+| `OAUTH_GOOGLE_CLIENT_ID` | Google OAuth Client ID                              | `123-abc.apps.googleusercontent.com` |
+| `OAUTH_GOOGLE_CLIENT_SECRET` | Google OAuth Secret                                 | `GOCSPX-abc123...` |
+| `FRONTEND_URL` | Frontend URL for CORS (leave empty for same domain) | `https://app.example.com` |
 
 ### Optional
 | Secret | Description | Default |
@@ -181,7 +314,6 @@ The app repository (`orders-ms-oauth-gateway`) needs:
 - Liquibase migrations
 
 ## Manual Deployment
-
 
 ```bash   
 # Trigger deployment via GitHub Actions UI (workflow_dispatch)
